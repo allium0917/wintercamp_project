@@ -1,3 +1,5 @@
+## discord id :: cherry_allium
+
 # RAG 기반 PDF 질의응답 시스템
 
 PDF 문서를 업로드하고 자연어 질문으로 문서 내용을 검색하여 LLM이 답변하는 시스템입니다.
