@@ -2,12 +2,10 @@ import os
 
 import pymupdf
 import pymupdf4llm
-import requests
-from fastapi import FastAPI, Body, UploadFile, File
+from fastapi import *
 from pydantic import BaseModel
 from starlette.requests import Request
 from starlette.responses import Response, RedirectResponse, JSONResponse
-from fastapi import HTTPException
 
 # from backend import rag_server
 # from backend.rag_server import llm_response
