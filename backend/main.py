@@ -1,6 +1,6 @@
 import os
 
-import fitz
+import pymupdf
 import pymupdf4llm
 import requests
 from fastapi import FastAPI, Body, UploadFile, File
@@ -96,7 +96,7 @@ async def upload(request: Request, file: UploadFile = File(...)):
 
     # 4) PyMuPDF로 바이트 스트림 열고 → pymupdf4llm로 Markdown 텍스트 추출
     try:
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
         full_text = pymupdf4llm.to_markdown(doc)  # 문서 전체를 Markdown 텍스트로
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"PDF 파싱 실패: {e}")
