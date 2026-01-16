@@ -1,64 +1,39 @@
 import os
+import requests
 
-import pymupdf
-import pymupdf4llm
-from fastapi import *
+from fastapi import FastAPI, UploadFile, File, Body, HTTPException
 from pydantic import BaseModel
 from starlette.requests import Request
-from starlette.responses import Response, RedirectResponse, JSONResponse
-
-# from backend import rag_server
-# from backend.rag_server import llm_response
+from starlette.responses import JSONResponse
+import pymupdf
+import pymupdf4llm
 
 app = FastAPI()
 
-# RAG 서버 URL
+# RAG 서버 주소
 RAG_SERVER_URL = os.getenv("RAG_SERVER_URL", "http://rag_server:8888")
 
-# Ollama 서버 URL
-OLLAMA_SERVER_URL = os.getenv("OLLAMA_SERVER_URL", "http://ollama:11434")
-
-full_text = ""
-
-# 1번 서버 띄우기
-@app.get("/hello")
-def hello():
-    return {"message": "Hello World"}
-
-#3. 로그인 하기 위해서 클래스 생성    #basemodel -> type 강제
+# 로그인용 모델
 class LoginUser(BaseModel):
     username: str
     password: str
 
-users = []
-users.append(LoginUser(username="park",password="q1w2e3"))
-users.append(LoginUser(username="choi",password="q1w2e3"))
 
-#2번 로그인
+users = [
+    LoginUser(username="park", password="q1w2e3"),
+    LoginUser(username="choi", password="q1w2e3"),
+]
+
+# 로그인
 @app.post("/login")
-def login(response: Response, user: LoginUser = Body()): #option enter  response ->sh,  body ->
-    # 로그인 검증
+def login(user: LoginUser = Body()):
     ok = any(u.username == user.username and u.password == user.password for u in users)
     if not ok:
-        return JSONResponse({"ok": False, "reason": "invalid credentials"}, status_code=401)
+        raise HTTPException(status_code=401, detail="invalid credentials")
 
-    # 응답 만들고 쿠키 세팅
     res = JSONResponse({"ok": True})
     res.set_cookie("username", user.username, httponly=True)
     return res
-
-
-@app.get("/page")
-def page(request: Request):
-    username = request.cookies.get("username")  # KeyError 방지
-    if not username:
-        return JSONResponse({"ok": False, "reason": "no cookie"}, status_code=401)
-
-    # username이 등록된 유저인지 확인
-    if username in [u.username for u in users]:
-        return {"ok": True, "message": f"welcome {username}"}
-
-    return JSONResponse({"ok": False, "reason": "unknown user"}, status_code=403)
 
 
 def get_current_user(request: Request) -> str:
@@ -72,43 +47,67 @@ def get_current_user(request: Request) -> str:
     return username
 
 
+# PDF 업로드 → RAG 서버 전달
+class RagUploadRequest(BaseModel):
+    full_text: str
+    chunk_size: int = 1000
+
+
 @app.post("/upload")
-async def upload(request: Request, file: UploadFile = File(...)):
-    global full_text
-    # 1) 쿠키 사용자 인증
-    username = get_current_user(request)
+async def upload_pdf(request: Request, file: UploadFile = File(...)):
+    user = get_current_user(request)
 
-    # 2) PDF만 허용 (content-type은 클라이언트가 속일 수 있어서 확장자도 같이 체크)
-    filename = (file.filename or "").lower()
-    if not filename.endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="PDF 파일만 업로드 가능합니다")
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="PDF만 업로드 가능")
 
-    if file.content_type not in (None, "application/pdf"):
-        # 일부 클라이언트는 content_type이 None인 경우도 있어 None은 허용
-        raise HTTPException(status_code=400, detail="content-type이 PDF가 아닙니다")
-
-    # 3) 저장 없이 메모리에서 바이트로 읽기
     pdf_bytes = await file.read()
     if not pdf_bytes:
-        raise HTTPException(status_code=400, detail="빈 파일입니다")
+        raise HTTPException(status_code=400, detail="빈 파일")
 
-    # 4) PyMuPDF로 바이트 스트림 열고 → pymupdf4llm로 Markdown 텍스트 추출
+    # PDF → 텍스트
     try:
         doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
-        full_text = pymupdf4llm.to_markdown(doc)  # 문서 전체를 Markdown 텍스트로
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"PDF 파싱 실패: {e}")
+        full_text = pymupdf4llm.to_markdown(doc)
     finally:
-        try:
-            doc.close()
-        except Exception:
-            pass
+        doc.close()
 
-    # 여기서 full_text 변수를 원하는 대로 후처리/저장(DB 등)하면 됨
-    # 지금은 예시로 일부 정보만 반환
+    # 👉 RAG 서버로 full_text 전달 (니 코드 그대로 사용)
+    payload = {
+        "full_text": full_text,
+        "chunk_size": 1000
+    }
+
+    res = requests.post(f"{RAG_SERVER_URL}/upload", json=payload)
+    if res.status_code != 200:
+        raise HTTPException(status_code=500, detail="RAG 서버 업로드 실패")
+
     return {
         "ok": True,
-        "user": username,
+        "user": user,
         "chars": len(full_text),
-        "preview": full_text[:500],  # 너무 길면 잘라서
+        "rag": res.json()
+    }
+
+
+# 질문 → RAG 서버로 전달
+class QuestionRequest(BaseModel):
+    query: str
+
+
+@app.post("/ask")
+def ask_rag(request: Request, body: QuestionRequest):
+    user = get_current_user(request)
+
+    res = requests.post(
+        f"{RAG_SERVER_URL}/answer",
+        json={"query": body.query}
+    )
+
+    if res.status_code != 200:
+        raise HTTPException(status_code=500, detail="RAG 서버 응답 실패")
+
+    return {
+        "ok": True,
+        "user": user,
+        "answer": res.json()["response"]
     }
