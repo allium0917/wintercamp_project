@@ -188,6 +188,7 @@ curl -X POST http://localhost:8000/query \
 | GET    | /page     | 페이지 접근 확인    | O         |
 | POST   | /upload   | PDF 업로드          | O         |
 | POST   | /query    | 질문하기            | O         |
+| POST   | /summary  | 요약하기           | O         |
 
 ### RAG Server (Port 8888)
 
